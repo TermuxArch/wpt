@@ -49,4 +49,23 @@ window.prepareNavigation = function(callback) {
     {once: true});
   executor.suspend(callback);
 }
+
+// Try to disable BFCache by acquiring and never releasing a Web Lock.
+// This requires HTTPS.
+// Note: This is a workaround depending on non-specified WebLock+BFCache
+// behavior. We might want to introduce a test-only BFCache-disabling API
+// instead in the future.
+window.disableBFCache = () => {
+  return new Promise(resolve => {
+    // Use page's UUID as a unique lock name.
+    navigator.locks.request(uuid, () => {
+      resolve();
+      return new Promise(() => {});
+    });
+  });
+};
+
+// Indicates whether this page is served with `pipe=sub`.
+// This is used e.g. for `pushState()`-related tests.
+window.hasPipeSub = '{{GET[uuid]}}' === uuid;
 </script>

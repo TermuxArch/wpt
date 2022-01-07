@@ -1,0 +1,68 @@
+<!DOCTYPE HTML>
+<meta name="timeout" content="long">
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script src="/common/utils.js"></script>
+<script src="/common/dispatcher/dispatcher.js"></script>
+<script src="resources/helper.sub.js"></script>
+<script>
+// See https://github.com/whatwg/html/issues/6207 for discussion on the
+// specified, implemented and desired behaviors.
+for (const shouldBeBFCached of [true, false]) {
+  runBfcacheTest({
+    funcBeforeNavigation: async (shouldBeBFCached) => {
+      const urlPushState = location.href + '&pipe=sub';
+      if (!shouldBeBFCached) {
+        await disableBFCache();
+      }
+
+      // `pushState(..., urlPushState)` on `urlA`,
+      history.pushState('blue', '', urlPushState);
+    },
+    argsBeforeNavigation: [shouldBeBFCached],
+    shouldBeCached: shouldBeBFCached,
+    funcAfterAssertion: async (pageA) => {
+      const urlA = location.origin + executorPath + pageA.context_id;
+      const urlPushState = urlA + '&pipe=sub';
+
+      // and then navigate to `urlB` and then back navigate
+      // (already done within `runBfcacheTest()`).
+      // After the back navigation, `location` etc. should point to
+      // `urlPushState` and the state that's pushed.
+      assert_equals(await pageA.execute_script(() => location.href),
+                    urlPushState, 'url (1)');
+      assert_equals(await pageA.execute_script(() => history.state),
+                    'blue', 'history.state (1)');
+
+      const hasPipeSub1 = await pageA.execute_script(() => hasPipeSub);
+      if (shouldBeBFCached) {
+        assert_equals(hasPipeSub1, false,
+            'document should be loaded from urlA without pipe=sub (1)');
+      } else {
+        // When the page is not restored from BFCache, the HTML page is loaded
+        // from `urlPushState` (not from `urlA`).
+        assert_equals(hasPipeSub1, true,
+            'document should be loaded from urlPushState with pipe=sub (1)');
+      }
+      const loadCount1 = await pageA.execute_script(() => loadCount);
+
+      // `history.back()` and then wait for `onpopstate`.
+      await pageA.execute_script(() => new Promise(resolve => {
+        window.onpopstate = () => resolve();
+        history.back();
+      }));
+
+      // `location` etc. should point to the original URL before `pushState()`,
+      assert_equals(await pageA.execute_script(() => location.href),
+                    urlA, 'url (2)');
+      assert_equals(await pageA.execute_script(() => history.state),
+                    null, 'history.state (2)');
+      // but the Document itself should be kept and not newly loaded.
+      const loadCount2 = await pageA.execute_script(() => loadCount);
+      assert_equals(loadCount2, loadCount1,
+          'document should be kept (2)');
+    }
+  }, 'back navigation to pushState()d page (' +
+     (shouldBeBFCached ? '' : 'not ') + 'in BFCache)');
+}
+</script>
