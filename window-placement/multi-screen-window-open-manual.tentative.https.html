@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name=timeout content=long>
+  <title>Multi-Screen Window Placement test: window.open() manual</title>
+  <link rel="help" href="https://webscreens.github.io/window-placement/">
+  <!-- user agents are not required to support open features other than `noopener`
+      and on some platforms position and size features don't make sense -->
+  <meta name="flags" content="may" />
+</head>
+<body style="font-family:DejaVu Sans, Bitstream Vera Sans, Arial, Sans;">
+  This is a manual test of Multi-Screen Window Placement features.<br>
+  This test uses multi-screen details to open a popup window on each display.<br>
+  Run this test in a compatible browser (e.g. Chromium, not content_shell), using run_blink_wptserve.py.<br><br>
+  <button id="setUp">Click to get screen details; accept the permission prompt as needed</button>
+  <ul id="popupButtons"></ul>
+  <button id="tearDown" disabled>Click to close any remaining open popups</button>
+  <ol id="logger"></ol>
+  <div id="result"><strong>Testing in progress</strong></div>
+  <p>
+
+  <script src="/resources/testharness.js"></script>
+  <script src="/resources/testharnessreport.js"></script>
+  <script>
+    const resultPass = "<strong style='color:green'>PASS</strong> ";
+    const resultFail = "<strong style='color:red'>FAIL</strong> ";
+    let permissionStatus = null;
+    let screenDetails = null;
+    let popupWindows = [];
+
+    function log(str) {
+      let entry = document.createElement("li");
+      entry.innerHTML = str;
+      logger.appendChild(entry);
+      return entry;
+    }
+
+    window.addEventListener('load', async () => {
+      // Check that the API is supported; multiple screens are connected; and permissions are supported (non-file url).
+      if (!('getScreenDetails' in self) || !('isExtended' in screen) || !('onchange' in screen)) {
+        log("<strong style='color:red'>ERROR</strong>: API not supported; use Chromium (not content_shell), and enable chrome://flags/#enable-experimental-web-platform-features");
+        setUp.disabled = true;
+      } else if (!screen.isExtended) {
+        log("<strong style='color:red'>ERROR</strong>: Extend your desktop environment with an additional screen and refresh");
+        setUp.disabled = true;
+      } else if (window.location.href.startsWith('file')) {
+        log("<strong style='color:red'>ERROR</strong>: Run via run_blink_wptserve.py or another http server; file URLs lack permission support");
+        setUp.disabled = true;
+      } else {
+        permissionStatus = await navigator.permissions.query({name:'window-placement'});
+        permissionStatus.addEventListener('change', async () => {
+          permissionStatus = await navigator.permissions.query({name:'window-placement'});
+          if (permissionStatus.state !== "granted")
+            log("<strong style='color:yellow'>WARNING</strong>: Permission status changed to: " + permissionStatus.state);
+        });
+      }
+    });
+
+    setUp.addEventListener("click", async () => {
+      // Get multi-screen details (prompting as needed).
+      screenDetails = await getScreenDetails().catch((e)=>{ log(e); return null; });
+      if (!screenDetails) {
+        log("Error getting screen details; permission denied?");
+        return;
+      }
+
+      setUp.disabled = true;
+
+      // Make a button to show and verify a popup on each screen.
+      for (s of screenDetails.screens) {
+        let popupButton = document.createElement("button");
+        popupButton.innerHTML = "Click to open a popup on '" + s.label + "'";
+        popupButton.screen = s;
+        async_test(t => {
+          popupButton.t = t;
+          popupButton.addEventListener("click", async (e) => {
+            if (!e.target.popupWindow) {
+              // Show a popup child window on the associated screen.
+              e.target.left = e.target.screen.availLeft + e.target.screen.availWidth/2 - 150;
+              e.target.top = e.target.screen.availTop + e.target.screen.availHeight/2 - 50;
+              e.target.popupWindow = window.open(window.location, '', `left=${e.target.left},top=${e.target.top},width=300,height=100`);
+              e.target.result = resultPass;
+              e.target.error = "";
+
+              // Check the placement, initial `screenLeft` and `screenTop` values before the document loads should be equal.
+              let screenLeftInitial = e.target.popupWindow.screenLeft;
+              let screenTopInitial = e.target.popupWindow.screenTop;
+              if (screenLeftInitial != e.target.left || screenTopInitial != e.target.top) {
+                e.target.result = resultFail;
+                e.target.error = "Initial: (" + screenLeftInitial + ", " + screenTopInitial + ") <br>";
+              }
+              e.target.t.step(function() {
+                assert_equals(screenLeftInitial, e.target.left);
+                assert_equals(screenTopInitial, e.target.top);
+              });
+
+              // Wait for window.screenTop|screenLeft values to be resolved after the window frame is created.
+              // Window.open()'s `top` and `left` feature string parameters represent the origin of the child popup window.
+              // Window.open() synchronously returns a Window object with estimated screenTop|screenLeft values.
+              // The child window's screenTop|screenLeft values are updated during asynchronous window creation and clamped placement.
+              await new Promise(resolve => { e.target.popupWindow.onload = resolve; });
+              await new Promise(resolve => { step_timeout(resolve, 300); });
+              e.target.popupWindow.document.write(
+                  "Expected: (" + e.target.left + ", " + e.target.top + ")<br>" +
+                  "Initial: (" + screenLeftInitial + ", " + screenTopInitial + ")<br>" +
+                  "Resolved: (" + e.target.popupWindow.screenLeft + ", " + e.target.popupWindow.screenTop + ")<br>");
+              // Window.screenTop|screenLeft may represent the origin of the child popup window's web content viewport, inset by the window's frame.
+              // These values may also be zero, if the user agent wishes to hide information about the screen of the output device.
+              // As needed, roughly estimate the window's resolved coordinates by subtracting the difference of the window's inner and outer sizes.
+              let tolerance = 10;
+              let estimatedWindowLeft = e.target.popupWindow.screenTop - (e.target.popupWindow.outerWidth - e.target.popupWindow.innerWidth) / 2;
+              let estimatedWindowTop = e.target.popupWindow.screenTop - (e.target.popupWindow.outerHeight - e.target.popupWindow.innerHeight);
+              if ((e.target.popupWindow.screenLeft != 0 &&
+                   e.target.popupWindow.screenLeft != e.target.left &&
+                   Math.abs(estimatedWindowLeft - e.target.left) > tolerance) ||
+                  (e.target.popupWindow.screenTop != 0 &&
+                   e.target.popupWindow.screenTop != e.target.top &&
+                   Math.abs(estimatedWindowTop - e.target.top) > tolerance)) {
+                e.target.result = resultFail;
+                e.target.error += "Resolved: (" + e.target.popupWindow.screenLeft + ", " + e.target.popupWindow.screenTop + ") <br>";
+              }
+              e.target.t.step(function() {
+                assert_true((e.target.popupWindow.screenLeft == 0) ||
+                            (e.target.popupWindow.screenLeft == e.target.left) ||
+                            (Math.abs(estimatedWindowLeft - e.target.left) <= tolerance));
+                assert_true((e.target.popupWindow.screenTop == 0) ||
+                            (e.target.popupWindow.screenTop == e.target.top) ||
+                            (Math.abs(estimatedWindowTop - e.target.top) <= tolerance));
+              });
+
+              // Log the per-screen test result.
+              if (e.target.error) {
+                log(e.target.result + "Popup misplaced for screen '" + e.target.screen.label + "' <br>" +
+                    "Expected: (" + e.target.left + ", " + e.target.top + ") <br>" + e.target.error);
+                e.target.popupWindow.document.write(e.target.result);
+              } else {
+                log(e.target.result + "Popup placed correctly for screen '" + e.target.screen.label + "'");
+                e.target.popupWindow.document.write(e.target.result);
+              }
+              e.target.innerHTML = e.target.result + " Click to close the popup on '" + e.target.screen.label + "'";
+              e.target.t.done();
+
+              // Check for a final test result.
+              if (!Array.from(popupButtons.children).find(entry => !entry.children[0].result)) {
+                result.innerHTML = "<strong>Result: </strong>" + (Array.from(popupButtons.children).find(entry => entry.children[0].error) ? resultFail : resultPass);
+                tearDown.disabled = false;
+              }
+            } else {
+              e.target.popupWindow.close();
+              e.target.popupWindow = null;
+              e.target.disabled = true;
+              e.target.innerHTML = e.target.result + " on '" + e.target.screen.label + "'";
+              tearDown.disabled |= !Array.from(popupButtons.children).find(entry => entry.children[0].popupWindow && !entry.children[0].popupWindow.closed);
+            }
+          });
+          let entry = document.createElement("li");
+          entry.appendChild(popupButton);
+          popupButtons.appendChild(entry);
+        }, "Open a popup window on '" + popupButton.screen.label + "'");
+      }
+    });
+
+    tearDown.addEventListener("click", async () => {
+      for (entry of popupButtons.children) {
+        let button = entry.children[0];
+        if (button.popupWindow) {
+            button.popupWindow.close();
+            button.popupWindow = null;
+            button.disabled = true;
+            button.innerHTML = button.result + " on '" + button.screen.label + "'";
+        }
+      }
+      tearDown.disabled = true;
+    });
+  </script>
+</body>
+</html>
